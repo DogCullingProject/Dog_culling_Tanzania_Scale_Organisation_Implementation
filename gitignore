@@ -1,0 +1,13 @@
+# Data are not shared publicly
+data/
+data_nonanon/
+data_shared/
+prepare_data_PRIVATE.R
+
+# Outputs
+output/
+*.png
+*.rds
+.Rhistory
+.RData
+.Rproj.user/
