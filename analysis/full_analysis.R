@@ -331,50 +331,6 @@ sum(prac_complete$Non_specific_Number_culled == "more")
 range(prac_complete$Number_culled_1Event[prac_complete$Non_specific_Number_culled != "more"])
 round(range(prac_complete$pct_pop_culled), 2)
 
-## 3c. Association between event frequency and cull size
-# -> Methods S1 (association between events and cull size). p_corr not in paper
-assoc_nb   <- MASS::glm.nb(Number_culled_1Event ~ log2(Frequency_12m), data = prac_complete)
-assoc_null <- MASS::glm.nb(Number_culled_1Event ~ 1, data = prac_complete)
-exp(cbind(RR = coef(assoc_nb), confint(assoc_nb)))[2, ]   # rate ratio per doubling of events
-anova(assoc_null, assoc_nb)                                # likelihood ratio test p-value
-
-# Same question, different models -> Methods S1 (p = 0.08-0.44; Poisson p < 0.001)
-d <- prac_complete %>%
-  mutate(events  = Frequency_12m,
-         size    = Number_culled_1Event,
-         minimum = Non_specific_Number_culled == "more")
-
-glm_row <- function(label, m, m0, term) {
-  ci <- suppressMessages(confint(m))[term, ]
-  tibble(model = label,
-         estimate = exp(coef(m)[[term]]),
-         lo = exp(ci[[1]]), hi = exp(ci[[2]]),
-         p  = anova(m0, m, test = "Chisq")[2, ncol(anova(m0, m, test = "Chisq"))])
-}
-
-glm_compare <- bind_rows(
-  glm_row("1 NB: size ~ log2(events)",
-          MASS::glm.nb(size ~ log2(events), data = d),
-          MASS::glm.nb(size ~ 1, data = d), "log2(events)"),
-  glm_row("2 NB: size ~ events",
-          MASS::glm.nb(size ~ events, data = d),
-          MASS::glm.nb(size ~ 1, data = d), "events"),
-  glm_row("3 NB: size ~ log2(events) + minimum",
-          MASS::glm.nb(size ~ log2(events) + minimum, data = d),
-          MASS::glm.nb(size ~ minimum, data = d), "log2(events)"),
-  glm_row("4 NB: events ~ log2(size)",
-          MASS::glm.nb(events ~ log2(size), data = d),
-          MASS::glm.nb(events ~ 1, data = d), "log2(size)"),
-  glm_row("5 Linear: log(size) ~ log2(events)",
-          glm(log(size) ~ log2(events), data = d),
-          glm(log(size) ~ 1, data = d), "log2(events)"),
-  glm_row("6 Poisson: size ~ log2(events)",
-          glm(size ~ log2(events), family = poisson, data = d),
-          glm(size ~ 1, family = poisson, data = d), "log2(events)")
-) %>%
-  mutate(across(c(estimate, lo, hi), ~ round(.x, 2)), p = signif(p, 2))
-glm_compare
-
 p_corr <- ggplot(prac_complete,
                  aes(Frequency_12m, Number_culled_1Event,
                      shape = Non_specific_Number_culled)) +
