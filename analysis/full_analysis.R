@@ -138,24 +138,27 @@ missing_data
 
 ## 2a. Descriptives (Table 2)
 # -> Table 2, culling / no culling columns
-med_range <- function(x, dp = 0) {
+# Populations as median (IQR), rounded, so no single LGA is identifiable
+med_iqr2 <- function(x, dp = 0, round_to = NA) {
+  q <- quantile(x, c(0.5, 0.25, 0.75), na.rm = TRUE)
+  if (!is.na(round_to)) q <- round(q / round_to) * round_to
   f <- function(v) formatC(v, format = "f", digits = dp, big.mark = ",")
-  sprintf("%s [%s - %s]", f(median(x, na.rm = TRUE)),
-          f(min(x, na.rm = TRUE)), f(max(x, na.rm = TRUE)))
+  sprintf("%s (%s-%s)", f(q[1]), f(q[2]), f(q[3]))
 }
 n_pct <- function(x) sprintf("%d (%.0f%%)", sum(x, na.rm = TRUE),
                              100 * mean(x, na.rm = TRUE))
 
 occ %>% group_by(culled_12m) %>%
   summarise(n           = n(),
-            human_pop   = med_range(human_pop),
-            dog_pop     = med_range(dog_pop_2022),
-            hdr         = med_range(hdr, 1),
+            human_pop   = med_iqr2(human_pop, round_to = 1000),
+            dog_pop     = med_iqr2(dog_pop_2022, round_to = 100),
+            hdr         = med_iqr2(hdr, 1),
             urban       = n_pct(urban),
             rabies_dog  = n_pct(rabies_dog),
             rabies_hum  = n_pct(rabies_human),
             rabies_prob = n_pct(rabies_problem),
-            vacc        = n_pct(dog_vaccination))
+            vacc        = n_pct(dog_vaccination)) %>%
+  print(width = Inf)
 
 ## 2b. Univariable logistic regression (Table 2)
 # -> Table 2 OR and p columns; Results 3.1.1 (urban OR 5.90, p = 0.017)
@@ -434,7 +437,7 @@ fig1
 
 #### 4. National estimate ####
 # Each simulated year: each LGA culls with probability p_rural or p_urban;
-# each culling LGA gets a number of events (zero-truncated negative binomial, 4b)
+# each culling LGA gets a number of events (shifted negative binomial, 4b)
 # and one cull size from the Bayesian cull size model (4c), used for all its events.
 # Uncertainty: 1,000 bootstrap resamples x 100 simulated years; median and
 # 2.5th-97.5th percentiles reported.
@@ -457,8 +460,8 @@ n_surveyed_rural <- p_by_stratum$n[p_by_stratum$settlement_type == "rural"]
 n_surveyed_urban <- p_by_stratum$n[p_by_stratum$settlement_type == "urban"]
 
 ## 4b. Events per LGA: fitted distributions (Table S4a, Figure S1a)
-# Zero-truncated negative binomial (main model)
-# Shifted negative binomial / shifted Poisson: fitted to count - 1
+# Shifted negative binomial (main model) / shifted Poisson: fitted to count - 1
+# Zero-truncated negative binomial: compared by AIC and used as a sensitivity analysis
 # mean/var -> Methods 2.2.1 (5.2, 29.3); AICs -> Results 3.1.2
 fit_events_dist <- function(ev, dist = "trunc_nbinom") {
   switch(dist,
@@ -505,10 +508,10 @@ cdf_fitted <- function(fits, x) {
            F = ppois(x - 1, lambda = e$shifted_pois[["lambda"]])))
 }
 dist_lines <- scale_linetype_manual(
-  values = c("Zero-truncated negative binomial" = "solid",
-             "Shifted negative binomial"        = "dashed",
+  values = c("Shifted negative binomial"        = "solid",    # main model
+             "Zero-truncated negative binomial" = "dashed",
              "Shifted Poisson"                  = "dotted"),
-  breaks = c("Zero-truncated negative binomial", "Shifted negative binomial", "Shifted Poisson"),
+  breaks = c("Shifted negative binomial", "Zero-truncated negative binomial", "Shifted Poisson"),
   name = NULL)
 theme_figS1 <- theme_minimal(base_size = 11) +
   theme(panel.grid.minor = element_blank(),
@@ -563,6 +566,7 @@ cull_size_model_unbounded <- brm(
   Number_culled_1Event_shift | cens(cens_right) ~ Frequency_12m,
   data = prac_complete, prior = cull_size_prior, family = negbinomial(),
   seed = 123, chains = 4, warmup = 1500, iter = 3500, refresh = 0)
+set.seed(123)
 pp_unb <- posterior_predict(cull_size_model_unbounded, ndraws = 4000) + 1
 sapply(which(is_min), function(j) {
   v <- pp_unb[, j]; v <- v[v > cull_size[j]]
@@ -695,7 +699,7 @@ run_scenario <- function(scenario,
                          n_by_type   = c(N_rural, N_urban),
                          p_fun       = function(pr, pu) c(pr, pu),
                          prac_pool   = seq_along(events),
-                         event_dist  = "trunc_nbinom",
+                         event_dist  = "shifted_nb",
                          ev_cap      = Inf,
                          upper_limit = Inf,
                          log2_events = FALSE,
@@ -704,8 +708,8 @@ run_scenario <- function(scenario,
                          fixed       = FALSE,
                          B = 1000, sims_per_boot = 100, seed = 123) {
   set.seed(seed)
-  if (fixed) {                               # no parameter uncertainty
-    draws <- as.data.frame(lapply(draws, median))
+  if (fixed) {                               # no parameter uncertainty (posterior means)
+    draws <- as.data.frame(lapply(draws, mean))
     B <- 1; sims_per_boot <- B_fixed_sims
   }
   totals <- vector("list", B)
@@ -813,9 +817,9 @@ s5_log2 <- cached("log2", run_scenario(
   draws = get_dogs_draws(fit_dogs_bayes(make_dogs_df(), rhs = "log2_events")),
   log2_events = TRUE))
 
-# Shifted negative binomial for events (cull size model is already shifted)
-s5_shnb <- cached("shifted_nb", run_scenario(
-  "Shifted negative binomial distributions", event_dist = "shifted_nb"))
+# Zero-truncated negative binomial for events (main model uses shifted negative binomial)
+s5_trnb <- cached("trunc_nb", run_scenario(
+  "Zero-truncated negative binomial for events", event_dist = "trunc_nbinom"))
 
 ## Minimum ("more than") counts (refit) ---------------------------------------
 s5_exact <- cached("min_exact", run_scenario(
@@ -829,6 +833,11 @@ s5_x15 <- cached("min_x15", run_scenario(
 s5_x3 <- cached("min_x3", run_scenario(
   "Minimum counts between X and 3X",
   draws = get_dogs_draws(fit_dogs_bayes(make_dogs_df(upper_fun = function(s) 3 * s)))))
+
+# Same upper bound of 300 for every minimum count
+s5_x300 <- cached("min_x300", run_scenario(
+  "Minimum counts between X and 300",
+  draws = get_dogs_draws(fit_dogs_bayes(make_dogs_df(upper_fun = function(s) 300 + 0 * s)))))
 
 s5_unbounded <- cached("min_unbounded", run_scenario(
   "Minimum counts with no upper bound (upper scenario)",
@@ -859,8 +868,8 @@ range(c(s5_main$median, s5_seeds$median))
 
 ## Table S5 -------------------------------------------------------------------
 table_s5 <- bind_rows(s5_main, s5_flat, s5_unsamp, s5_dropmax, s5_indep, s5_emp,
-                      s5_perevent, s5_evcap, s5_log2, s5_shnb, s5_exact, s5_x15,
-                      s5_x3, s5_unbounded, s5_upper, s5_prior, s5_fixed) %>%
+                      s5_perevent, s5_evcap, s5_log2, s5_trnb, s5_exact, s5_x15,
+                      s5_x3, s5_x300, s5_unbounded, s5_upper, s5_prior, s5_fixed) %>%
   mutate(estimate = sprintf("%s (%s-%s)",
                             format(round(median), big.mark = ","),
                             format(round(lo), big.mark = ","),
